@@ -1,0 +1,140 @@
+---
+title: "Practical Machine Learning Project"
+author: "Claudio Seidi Takamiya"
+date: "15 de fevereiro de 2015"
+output: html_document
+---
+
+# Introduction
+The project is based on research of Human Activity Recognition. The Weight 
+Lifting Exercises dataset is provided by Groupware@LES.  The objective of this
+project is identify "how well" an activity was performed. More information is 
+available from the website http://groupware.les.inf.puc-rio.br/har.
+
+---
+#Loading required libraries and downloading dataset
+The following code loads the required libraries and downloads the dataset from 
+the website.
+
+```{r}
+suppressPackageStartupMessages(
+        library(randomForest, quietly=TRUE, verbose=FALSE))
+library(caret, quietly=TRUE)
+
+if (!file.exists("pml-training.csv")) {
+        urlFile <- paste("https://d396qusza40orc.cloudfront.net/",
+                         "predmachlearn/pml-training.csv")
+        download.file(url=urlFile, destfile="pml-training.csv",
+                      method="curl", cacheOK=FALSE)
+}
+if (!file.exists("pml-testing.csv")) {
+        urlFile <- paste("https://d396qusza40orc.cloudfront.net/",
+                 "predmachlearn/pml-testing.csv")
+        download.file(url=urlFile, destfile="pml-testing.csv",
+              method="curl", cacheOK=FALSE)
+}
+
+dataset <- read.csv("pml-training.csv")
+testcases <- read.csv("pml-testing.csv")
+# Deleting the first column (variable) - it is meaningless
+dataset <- dataset[, -1]
+testcases <- testcases[,-1]
+```
+
+---
+#Exploratory Analysis
+The number of features is quite large and analyze them one by time needs a lot of
+work.
+```{r}
+dim(dataset)
+```
+Many of variables are missing data and an imputation strategy doesn't justify 
+since their values are very sparse. The reason of this is most of them are 
+summarization of other variables.
+```{r}
+head(dataset[, 11:17])
+```
+
+---
+# Cleaning dataset
+The following code excludes the columns with missing data. 
+Other issue found is type of variable. For some reason variables of test case 
+are assuming different types from training set. To solve this problem in both 
+datasets, all variables (numeric types only) are converted to double (as.double).
+```{r}
+temp <- apply(dataset, 2, function(x) ( any(is.na(x)) ||
+                                       (is.factor(x) && nlevels(x) > 32) ||
+                                       any(x == "")))
+
+temp <- union( c("user_name", "raw_timestamp_part_1",
+                         "raw_timestamp_part_2",
+                         "cvtd_timestamp" ,
+                         "new_window", "num_window"), names(temp)[temp])
+ind <- setdiff(names(dataset), temp)
+training <- dataset[, ind]
+cases <- testcases[, setdiff(names(training), "classe")]
+for (i in setdiff(names(training), "classe")) {
+        training[, i] <- as.double(training[, i])
+        cases[, i]    <- as.double(cases[, i])
+}
+```
+---
+
+# Fitting model
+Even ignoring `r length(temp)` variables a lot of them still remaining. Therefore 
+the Random Forests algorithm was chosen to fit a classifier model.
+
+## Partitioning data set into training and testing sets.
+```{r}
+inTrain <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+testing <- training[-inTrain, ]
+training <-training[inTrain, ]
+```
+
+---
+
+## Cross-validation for feature selection.
+The following code shows the cross-validated prediction performance of models
+with sequentially reduced number of predictors. The plot shows the cross-validation
+error by number of variables used.
+```{r, cache=TRUE}
+result <- rfcv(training[, setdiff(names(training), "classe")], training$classe)
+with(result, plot(n.var, error.cv, log="x",  type="o", lwd=2))
+```
+
+---
+
+The number of `r result$n.var[which.min(result$error.cv)]` variables were
+returned as result of rfcv. This is the result with smaller error.
+
+```{r}
+result$error.cv
+```
+
+---
+
+The number returned by rfcv function is used in the function randomForest as 
+parameter mtry. This parameters specifies the number of variables randomly 
+sampled as candidates at each split.
+
+```{r, cache=TRUE}
+modFit <- randomForest (x=training[, setdiff(names(training), "classe")],
+                              y=training[, "classe"], 
+                              ntree=400, 
+                              mtry=result$n.var[which.min(result$error.cv)],
+                              proximity=TRUE)
+
+tab <- table(training$classe, predict(modFit))
+class.error <- 1 - diag(tab) / apply(tab, 1, function(x) sum(x))
+tab <- cbind(tab, class.error)
+tab
+importance(modFit)
+answers <- as.character(predict(modFit, newdata=cases))
+answers
+```
+
+
+
+
+
+
